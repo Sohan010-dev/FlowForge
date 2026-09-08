@@ -119,6 +119,34 @@ function detectHeading(line: string): number | null {
   return null;
 }
 
+/** Max nodes before we keep only the structurally important ones. */
+const MAX_NODES = 40;
+/** Max characters of a label per line before wrapping. */
+const LABEL_LINE_CHARS = 26;
+
+/** Wraps a label into short lines (Mermaid `<br/>`) for readable node boxes. */
+function wrapLabel(s: string, maxChars = LABEL_LINE_CHARS): string {
+  const words = s.split(/\s+/);
+  const out: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (current && (current + " " + word).length > maxChars) {
+      out.push(current);
+      current = word;
+    } else {
+      current = current ? `${current} ${word}` : word;
+    }
+  }
+  if (current) out.push(current);
+  // Hard-cap at 4 lines with ellipsis so boxes never balloon.
+  if (out.length > 4) {
+    return [...out.slice(0, 4).map((l, i) => (i === 3 ? `${l}…` : l))].join(
+      "<br/>",
+    );
+  }
+  return out.join("<br/>");
+}
+
 /** Builds a hierarchical flowchart from the detected structure. */
 export function buildFlowchart(nodes: StructureNode[]): FlowchartResult {
   // Original ids stay stable even after de-dup filtering below.
@@ -132,6 +160,25 @@ export function buildFlowchart(nodes: StructureNode[]): FlowchartResult {
     if (seen.has(key)) continue;
     seen.add(key);
     kept.push(n);
+  }
+
+  // Too many nodes → unreadable hairball. Keep the skeleton: all headings,
+  // then bullets, then prose, until under the cap.
+  if (kept.length > MAX_NODES) {
+    const score = (n: StructureNode) =>
+      n.headingLevel !== null
+        ? 0
+        : n.bulletLevel !== null
+          ? 1
+          : 2;
+    const important = kept
+      .map((n, i) => ({ n, i, s: score(n) }))
+      .sort((a, b) => a.s - b.s || a.i - b.i)
+      .slice(0, MAX_NODES)
+      .sort((a, b) => a.i - b.i)
+      .map((x) => x.n);
+    kept.length = 0;
+    kept.push(...important);
   }
 
   if (kept.length === 0) {
@@ -169,7 +216,7 @@ export function buildFlowchart(nodes: StructureNode[]): FlowchartResult {
     }
 
     // Emit node with a shape matching its role.
-    const label = mQuote(node.label);
+    const label = wrapLabel(mQuote(node.label));
     if (node.headingLevel !== null) {
       lines.push(`  ${idOf(node)}(["${label}"])`);
     } else if (node.bulletLevel !== null && DECISION_RE.test(node.label)) {

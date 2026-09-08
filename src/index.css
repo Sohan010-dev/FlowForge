@@ -165,8 +165,20 @@ body {
 
 /* Mermaid canvas theming */
 .mermaid-canvas svg {
-  max-width: none;
-  height: auto;
+  max-width: none !important;
+  height: auto !important;
+}
+/* Bigger, clearer node text and thicker readable strokes */
+.mermaid-canvas .nodeLabel,
+.mermaid-canvas .edgeLabel {
+  font-size: 16px !important;
+  font-weight: 500;
+}
+.mermaid-canvas .node rect,
+.mermaid-canvas .node polygon,
+.mermaid-canvas .node circle,
+.mermaid-canvas .node path {
+  stroke-width: 1.75px;
 }
 .mermaid-canvas .flowchart-link,
 .mermaid-canvas .edgePath .path {

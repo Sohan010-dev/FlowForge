@@ -26,6 +26,21 @@ import {
   type FlowchartResult,
 } from "@/lib/flowchart";
 
+/** Zoom that fits the diagram to the canvas width, capped for readability. */
+function computeFitZoom(
+  w: number | null,
+  h: number | null,
+  scrollEl: HTMLDivElement | null,
+): number {
+  if (!w || !h || !scrollEl) return 1;
+  const pad = 48;
+  const availW = scrollEl.clientWidth - pad;
+  if (availW <= 0) return 1;
+  const fitW = availW / w;
+  // Never scale below 0.75 (text gets small) nor above 1.15 (pointless blowup).
+  return Math.min(1.15, Math.max(0.75, fitW));
+}
+
 type Stage =
   | { kind: "idle" }
   | { kind: "error"; message: string }
@@ -43,6 +58,8 @@ export default function Converter() {
   const svgHostRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const naturalSizeRef = useRef<{ w: number; h: number } | null>(null);
 
   // Configure mermaid once for the dark blue theme.
   useEffect(() => {
@@ -62,16 +79,49 @@ export default function Converter() {
         clusterBkg: "rgba(99,102,241,0.06)",
         clusterBorder: "#4f46e5",
         edgeLabelBackground: "#0b1020",
-        fontSize: "14px",
+        fontSize: "16px",
       },
-      flowchart: { curve: "basis", padding: 18 },
+      flowchart: {
+        curve: "basis",
+        padding: 20,
+        // Natural-size SVG — never shrink to fit container (that's what made
+        // charts unreadably small). The canvas scrolls and we zoom instead.
+        useMaxWidth: false,
+        htmlLabels: true,
+        nodeSpacing: 45,
+        rankSpacing: 55,
+      },
     });
   }, []);
 
   const reset = () => {
     setStage({ kind: "idle" });
     setZoom(1);
+    naturalSizeRef.current = null;
     if (svgHostRef.current) svgHostRef.current.innerHTML = "";
+  };
+
+  /** Sizes the SVG element to natural dimensions × zoom so scrolling works. */
+  const applyZoom = (z: number) => {
+    const svg = svgRef.current;
+    const nat = naturalSizeRef.current;
+    if (!svg || !nat) return;
+    svg.style.width = `${Math.round(nat.w * z)}px`;
+    svg.style.height = `${Math.round(nat.h * z)}px`;
+  };
+
+  useEffect(() => {
+    applyZoom(zoom);
+  }, [zoom]);
+
+  const fitToWidth = () => {
+    const z = computeFitZoom(
+      naturalSizeRef.current?.w ?? null,
+      naturalSizeRef.current?.h ?? null,
+      scrollRef.current,
+    );
+    setZoom(z);
+    applyZoom(z);
   };
 
   const processFile = async (file: File) => {
@@ -120,7 +170,14 @@ export default function Converter() {
       const { svg } = await mermaid.render(renderId, result.mermaid);
       if (svgHostRef.current) svgHostRef.current.innerHTML = svg;
       svgRef.current = svgHostRef.current?.querySelector("svg") ?? null;
-      setZoom(1);
+      // Cache natural size and render at a readable default zoom.
+      const el = svgRef.current;
+      const w = el?.viewBox?.baseVal?.width || el?.clientWidth || 800;
+      const h = el?.viewBox?.baseVal?.height || el?.clientHeight || 600;
+      naturalSizeRef.current = { w, h };
+      const defaultZoom = computeFitZoom(w, h, scrollRef.current);
+      setZoom(defaultZoom);
+      applyZoom(defaultZoom);
       setStage({ kind: "done", result, fileName: file.name });
       toast.success("Flowchart generated");
     } catch (err) {
@@ -386,8 +443,9 @@ export default function Converter() {
                   variant="ghost"
                   size="icon"
                   className="size-7"
-                  onClick={() => setZoom(1)}
-                  aria-label="Reset zoom"
+                  onClick={fitToWidth}
+                  aria-label="Fit to width"
+                  title="Fit to width"
                 >
                   <Maximize2 className="size-3.5" />
                 </Button>
@@ -395,7 +453,10 @@ export default function Converter() {
             ) : null}
           </div>
 
-          <div className="canvas-scroll relative flex-1 overflow-auto grid-bg">
+          <div
+            ref={scrollRef}
+            className="canvas-scroll relative flex-1 overflow-auto grid-bg"
+          >
             {stage.kind === "idle" ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 p-10 text-center">
                 <div className="flex size-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
