@@ -30,7 +30,6 @@ export async function extractPdfText(
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({
     data: new Uint8Array(buffer),
-    isEvalSupported: false,
   }).promise;
 
   const pages: PdfExtractResult["pages"] = [];
@@ -44,7 +43,7 @@ export async function extractPdfText(
   }
 
   const numPages = pdf.numPages;
-  pdf.destroy();
+  await pdf.cleanup();
   return { pages, numPages };
 }
 

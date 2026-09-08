@@ -2,7 +2,7 @@ import { motion } from "framer-motion";
 import {
   ArrowRight,
   FileText,
-  Flowchart,
+  Workflow,
   Github,
   Lock,
   ShieldCheck,
@@ -57,7 +57,7 @@ export default function Landing() {
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
           <a href="/" className="flex items-center gap-2.5">
             <span className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-blue-600 shadow-[0_0_16px_rgba(99,102,241,0.45)]">
-              <Flowchart className="size-4.5 text-white" strokeWidth={2.2} />
+              <Workflow className="size-4.5 text-white" strokeWidth={2.2} />
             </span>
             <span className="font-display text-lg font-semibold tracking-tight">
               Flow<span className="text-gradient-blue">Forge</span>

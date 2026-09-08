@@ -7,7 +7,7 @@ import {
   Copy,
   Download,
   FileText,
-  Flowchart,
+  Workflow,
   Loader2,
   Maximize2,
   RotateCcw,
@@ -41,6 +41,7 @@ export default function Converter() {
   const [zoom, setZoom] = useState(1);
   const inputRef = useRef<HTMLInputElement>(null);
   const svgHostRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   // Configure mermaid once for the dark blue theme.
@@ -185,7 +186,7 @@ export default function Converter() {
         <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6">
           <a href="/" className="flex items-center gap-2.5">
             <span className="flex size-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-blue-600 shadow-[0_0_16px_rgba(99,102,241,0.45)]">
-              <Flowchart className="size-4.5 text-white" strokeWidth={2.2} />
+              <Workflow className="size-4.5 text-white" strokeWidth={2.2} />
             </span>
             <span className="font-display text-lg font-semibold tracking-tight">
               Flow<span className="text-gradient-blue">Forge</span>
@@ -272,6 +273,13 @@ export default function Converter() {
 
             {stage.kind === "done" ? (
               <div className="mt-5 space-y-4">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  className="sr-only"
+                  onChange={onPick}
+                />
                 <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-white/5 px-3.5 py-3">
                   <FileText className="size-4 shrink-0 text-primary" />
                   <div className="min-w-0">
@@ -306,7 +314,7 @@ export default function Converter() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => inputRef.current?.click()}
+                    onClick={() => fileInputRef.current?.click()}
                     className="gap-1.5"
                   >
                     <Upload className="size-3.5" /> Replace
@@ -391,7 +399,7 @@ export default function Converter() {
             {stage.kind === "idle" ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 p-10 text-center">
                 <div className="flex size-14 items-center justify-center rounded-2xl border border-white/10 bg-white/5">
-                  <Flowchart className="size-6 text-muted-foreground" />
+                  <Workflow className="size-6 text-muted-foreground" />
                 </div>
                 <p className="text-sm font-medium">Your flowchart appears here</p>
                 <p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
@@ -414,13 +422,17 @@ export default function Converter() {
             ) : null}
 
             <motion.div
-              ref={svgHostRef}
-              initial={{ opacity: 0, scale: 0.97 }}
-              animate={{ opacity: stage.kind === "done" ? 1 : 0, scale: 1 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: stage.kind === "done" ? 1 : 0 }}
               transition={{ duration: 0.35 }}
-              className="mermaid-canvas flex min-h-full w-max min-w-full items-start justify-center p-8 origin-top"
-              style={{ transform: `scale(${zoom})` }}
-            />
+              className="flex min-h-full w-max min-w-full items-start justify-center p-8"
+            >
+              <div
+                ref={svgHostRef}
+                className="mermaid-canvas flex w-full justify-center transition-transform duration-200"
+                style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}
+              />
+            </motion.div>
           </div>
         </section>
       </main>

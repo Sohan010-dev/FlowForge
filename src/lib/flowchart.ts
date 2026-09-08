@@ -91,7 +91,15 @@ function detectHeading(line: string): number | null {
 
   const numbered = line.match(/^(\d+(?:\.\d+)*)[.)]?\s+\S/);
   if (numbered) {
-    return Math.min(4, numbered[1].split(".").length);
+    // Guard: "2023 saw growth" is prose, not a heading — require the first
+    // number group to be section-like (1-2 digits) or the text to be Title Case.
+    const firstPart = numbered[1].split(".")[0];
+    const rest = line.slice(numbered[0].length).trim();
+    const titleCase = /^[A-Z]/.test(rest);
+    if (firstPart.length <= 2 || titleCase) {
+      return Math.min(4, numbered[1].split(".").length);
+    }
+    return null;
   }
 
   const caps = line.match(/^[A-Z0-9][A-Z0-9 &,'\-/]{2,59}$/);
@@ -113,6 +121,8 @@ function detectHeading(line: string): number | null {
 
 /** Builds a hierarchical flowchart from the detected structure. */
 export function buildFlowchart(nodes: StructureNode[]): FlowchartResult {
+  // Original ids stay stable even after de-dup filtering below.
+  const nodeById = new Map(nodes.map((n) => [n.id, n] as const));
   const kept: StructureNode[] = [];
   const seen = new Set<string>();
 
@@ -170,12 +180,15 @@ export function buildFlowchart(nodes: StructureNode[]): FlowchartResult {
 
     // Emit edge.
     if (parentId !== null) {
-      if (node.bulletLevel !== null && DECISION_RE.test(node.label)) {
-        lines.push(`  ${idOf(kept[parentId])} -->|Yes| ${idOf(node)}`);
-        lines.push(`  ${idOf(kept[parentId])} -->|No| S${stopCounter}["Stop"]`);
-        stopCounter++;
-      } else {
-        lines.push(`  ${idOf(kept[parentId])} --> ${idOf(node)}`);
+      const parentNode = nodeById.get(parentId);
+      if (parentNode) {
+        if (node.bulletLevel !== null && DECISION_RE.test(node.label)) {
+          lines.push(`  ${idOf(parentNode)} -->|Yes| ${idOf(node)}`);
+          lines.push(`  ${idOf(parentNode)} -->|No| S${stopCounter}["Stop"]`);
+          stopCounter++;
+        } else {
+          lines.push(`  ${idOf(parentNode)} --> ${idOf(node)}`);
+        }
       }
     }
 
