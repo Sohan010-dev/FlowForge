@@ -7,9 +7,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
-  Download,
   Expand,
   FileText,
+  Image as ImageIcon,
   Minimize2,
   Workflow,
   Loader2,
@@ -23,6 +23,7 @@ import {
 import mermaid from "mermaid";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { snapdom } from "@zumer/snapdom";
 import { SocialLinks } from "@/components/SocialLinks";
 import { extractText, type ExtractProgress } from "@/lib/extract";
 import {
@@ -322,46 +323,63 @@ export default function Converter() {
     toast.success("Mermaid syntax copied");
   };
 
-  /** Saves the rendered flowchart as an SVG file — no signup, fully local. */
-  const saveFlowchart = () => {
+  /**
+   * Saves the flowchart as a PNG image — no signup, fully local.
+   * snapdom rasterizes the live SVG (HTML labels, fonts and all) onto an
+   * opaque dark background so the file is visible in any image viewer.
+   */
+  const saveFlowchart = async () => {
     if (stage.kind !== "done" || !svgRef.current) return;
-    const clone = svgRef.current.cloneNode(true) as SVGSVGElement;
-    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    // Reset any zoom applied inline so the file is the natural diagram size.
-    clone.style.width = "";
-    clone.style.height = "";
-    clone.removeAttribute("width");
-    clone.removeAttribute("height");
-    const vb = clone.viewBox?.baseVal;
-    if (vb && vb.width && vb.height) {
-      clone.setAttribute("width", String(vb.width));
-      clone.setAttribute("height", String(vb.height));
+    try {
+      toast.loading("Rendering image…", { id: "save" });
+      await snapdom.download(svgRef.current, {
+        format: "png",
+        scale: 2,
+        backgroundColor: "#0b1020",
+        filename: stage.fileName.replace(/\.[^.]+$/, "") + "-flowchart",
+      });
+      toast.success("Flowchart saved as PNG", { id: "save" });
+    } catch (err) {
+      console.error("PNG export failed:", err);
+      // Fallback: download the raw SVG markup instead.
+      try {
+        const clone = svgRef.current.cloneNode(true) as SVGSVGElement;
+        clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+        // Force a dark, opaque background so text is visible on white viewers.
+        clone.style.background = "#0b1020";
+        const vb = clone.viewBox?.baseVal;
+        if (vb?.width && vb?.height) {
+          clone.setAttribute("width", String(vb.width));
+          clone.setAttribute("height", String(vb.height));
+        } else {
+          const box = svgRef.current.getBBox();
+          clone.setAttribute(
+            "viewBox",
+            `0 0 ${Math.ceil(box.width)} ${Math.ceil(box.height)}`,
+          );
+          clone.setAttribute("width", String(Math.ceil(box.width)));
+          clone.setAttribute("height", String(Math.ceil(box.height)));
+        }
+        // Embed the app fonts so text renders outside the page context.
+        clone.setAttribute(
+          "style",
+          `${clone.getAttribute("style") ?? ""}; font-family: Inter, Arial, sans-serif;`,
+       );
+        const blob = new Blob([clone.outerHTML], {
+          type: "image/svg+xml;charset=utf-8",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download =
+          stage.fileName.replace(/\.[^.]+$/, "") + "-flowchart.svg";
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success("Saved as SVG instead", { id: "save" });
+      } catch {
+        toast.error("Could not save the flowchart", { id: "save" });
+      }
     }
-    const blob = new Blob([clone.outerHTML], {
-      type: "image/svg+xml;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = stage.fileName.replace(/\.[^.]+$/, "") + "-flowchart.svg";
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Flowchart saved");
-  };
-
-  const downloadSvg = () => {
-    if (stage.kind !== "done" || !svgRef.current) return;
-    const clone = svgRef.current.cloneNode(true) as SVGSVGElement;
-    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    const blob = new Blob([clone.outerHTML], {
-      type: "image/svg+xml;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = stage.fileName.replace(/\.pdf$/i, "") + "-flowchart.svg";
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   const busy =
@@ -494,7 +512,7 @@ export default function Converter() {
                     onClick={saveFlowchart}
                     className="col-span-2 gap-1.5 border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary"
                   >
-                    <Save className="size-3.5" /> Save flowchart
+                    <Save className="size-3.5" /> Save as image (PNG)
                   </Button>
                   <Button
                     variant="outline"
@@ -507,10 +525,10 @@ export default function Converter() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={downloadSvg}
+                    onClick={saveFlowchart}
                     className="gap-1.5"
                   >
-                    <Download className="size-3.5" /> SVG
+                    <ImageIcon className="size-3.5" /> PNG
                   </Button>
                   <Button
                     variant="outline"
