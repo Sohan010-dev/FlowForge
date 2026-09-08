@@ -59,44 +59,81 @@ type Stage =
 
 let mermaidId = 0;
 
+/** Minimal surface of the mermaid global we use (loaded from CDN). */
+interface MermaidLike {
+  initialize: (config: Record<string, unknown>) => void;
+  render: (id: string, text: string) => Promise<{ svg: string }>;
+}
+declare global {
+  interface Window {
+    mermaid?: MermaidLike;
+  }
+}
+
+const MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js";
+const MERMAID_CONFIG = {
+  startOnLoad: false,
+  theme: "base",
+  securityLevel: "loose",
+  fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+  themeVariables: {
+    background: "transparent",
+    primaryColor: "#1a2340",
+    primaryBorderColor: "#6366f1",
+    primaryTextColor: "#e6ebf7",
+    lineColor: "#818cf8",
+    secondaryColor: "#141b33",
+    tertiaryColor: "#10162b",
+    clusterBkg: "rgba(99,102,241,0.06)",
+    clusterBorder: "#4f46e5",
+    edgeLabelBackground: "#0b1020",
+    fontSize: "16px",
+  },
+  flowchart: {
+    curve: "basis",
+    padding: 20,
+    // Natural-size SVG — never shrink to fit container (that's what made
+    // charts unreadably small). The canvas scrolls and we zoom instead.
+    useMaxWidth: false,
+    htmlLabels: true,
+    nodeSpacing: 45,
+    rankSpacing: 55,
+  },
+} as const;
+
 /**
- * Mermaid is multi-MB, so it is lazy-loaded (dynamic import) the first time
- * a flowchart is actually rendered. This keeps it out of the initial bundle
- * and out of the production build's peak memory.
+ * Mermaid ships as a CDN <script> (per the product spec) and is injected
+ * lazily the first time a flowchart is rendered. Keeping it out of the
+ * bundle also keeps multi-MB diagram engines out of the production build.
  */
-let mermaidLoader: Promise<(typeof import("mermaid"))["default"]> | null = null;
+let mermaidLoader: Promise<MermaidLike> | null = null;
 const loadMermaid = () => {
-  mermaidLoader ??= import("mermaid").then((m) => {
-    m.default.initialize({
-      startOnLoad: false,
-      theme: "base",
-      securityLevel: "loose",
-      fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
-      themeVariables: {
-        background: "transparent",
-        primaryColor: "#1a2340",
-        primaryBorderColor: "#6366f1",
-        primaryTextColor: "#e6ebf7",
-        lineColor: "#818cf8",
-        secondaryColor: "#141b33",
-        tertiaryColor: "#10162b",
-        clusterBkg: "rgba(99,102,241,0.06)",
-        clusterBorder: "#4f46e5",
-        edgeLabelBackground: "#0b1020",
-        fontSize: "16px",
-      },
-      flowchart: {
-        curve: "basis",
-        padding: 20,
-        // Natural-size SVG — never shrink to fit container (that's what made
-        // charts unreadably small). The canvas scrolls and we zoom instead.
-        useMaxWidth: false,
-        htmlLabels: true,
-        nodeSpacing: 45,
-        rankSpacing: 55,
-      },
-    });
-    return m.default;
+  mermaidLoader ??= new Promise<MermaidLike>((resolve, reject) => {
+    if (window.mermaid) {
+      window.mermaid.initialize(MERMAID_CONFIG);
+      resolve(window.mermaid);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = MERMAID_CDN;
+    script.async = true;
+    script.onload = () => {
+      if (!window.mermaid) {
+        reject(new Error("Diagram engine failed to initialize."));
+        return;
+      }
+      window.mermaid.initialize(MERMAID_CONFIG);
+      resolve(window.mermaid);
+    };
+    script.onerror = () => {
+      mermaidLoader = null; // allow retry on next attempt
+      reject(
+        new Error(
+          "Couldn't load the diagram engine — check your internet connection and try again.",
+        ),
+      );
+    };
+    document.head.appendChild(script);
   });
   return mermaidLoader;
 };
