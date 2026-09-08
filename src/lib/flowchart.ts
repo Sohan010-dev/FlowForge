@@ -1,102 +1,84 @@
 /**
- * Heuristic PDF text → Mermaid flowchart converter.
+ * Heuristic document → key-point flowchart converter.
  *
- * Pure client-side regex/heuristics — no AI APIs, no network calls.
- * Pipeline: text lines → structure detection → hierarchical block graph →
- * valid Mermaid `flowchart TD` syntax.
+ * Pure client-side heuristics — no AI APIs, no network calls.
+ * Pipeline: raw lines → reconstructed sentences → importance scoring →
+ * distillation into short key points → topic grouping → Mermaid
+ * `flowchart TD` with a root → topics → key points hierarchy.
+ *
+ * The goal: someone who has never read the document can glance at the
+ * chart and walk away with its most important points — not a wall of
+ * transcribed sentences.
  */
-
-export interface StructureNode {
-  id: number;
-  label: string;
-  /** Heading level (1 = top). Null when not a heading. */
-  headingLevel: number | null;
-  /** Bullet depth (0-based). Null when not a list item. */
-  bulletLevel: number | null;
-  page: number;
-}
 
 export interface FlowchartResult {
   mermaid: string;
-  nodes: StructureNode[];
+  /** Distilled key points in chart order (most important kept). */
+  keyPoints: string[];
+  /** Topic (section) titles in document order. */
+  topics: string[];
   stats: {
     pages: number;
-    headings: number;
-    bullets: number;
-    nodes: number;
+    sentences: number;
+    keyPoints: number;
+    topics: number;
   };
+}
+
+export interface PageLines {
+  pageNumber: number;
+  lines: string[];
 }
 
 const BULLET_RE =
   /^\s*(?:[•▪●‣◦·]\s*|[-–—]\s+|\d{1,2}[.)]\s+|[a-zA-Z][.)]\s+|(?:i{1,3}|iv|v|vi{1,3}|ix|x)[.)]\s+)/i;
 
+/** Question-shaped points render as decision diamonds. */
 const DECISION_RE =
-  /^(?:if|when|whether|should|do (?:we|i)|should (?:we|i)|is (?:it|there)|are (?:they|there)|has|does|can|must)\b[^?.]*\??$/i;
+  /^(?:if|when|whether|should|is|are|does|do|can|must|has|have)\b[^?]*\?/i;
 
-/** Detects document structure from extracted PDF lines. */
-export function detectStructure(
-  pages: { pageNumber: number; lines: string[] }[],
-): StructureNode[] {
-  const nodes: StructureNode[] = [];
-  let id = 0;
+/** Words that signal a sentence carries real substance. */
+const SIGNAL_RE =
+  /\b(must|should|require[ds]?|need|needs|important|critical|key|ensure[ds]?|goal|objectives?|purpose|aims?|benefits?|results?|outcomes?|conclusions?|conclude|summar\w+|recommen\w+|best practices?|steps?|process|increas\w+|decreas\w+|improv\w+|reduc\w+|risks?|because|therefore|due to|impacts?|affects?|effects?|enabl\w+|provid\w+|helps?|avoid|prevents?|maximi[sz]e|minimi[sz]e|optimi[sz]e|priorit\w+|significan\w+|essential|primary|advantages?|disadvantages?|challenges?|solutions?|problems?|issues?)\b/gi;
 
-  for (const page of pages) {
-    for (const raw of page.lines) {
-      const line = raw.replace(/\s+/g, " ").trim();
-      if (!line || line.length < 2) continue;
+/** Runners, footers, URLs, captions — never key points. */
+const BOILERPLATE_RE =
+  /copyright|©|all rights reserved|www\.|https?:\/\/|confidential|^\s*(table of contents|contents|references|bibliography|appendix|glossary)\b|^\s*(figure|fig\.|table|exhibit|chart)\s*\d|^\s*page\s+\d+\b|^\s*\d+\s*[|·]\s*\d+\s*$|^\s*\d+\s*$|^\s*(draft|rev(ision)?\s*\d)/i;
 
-      const bulletMatch = line.match(BULLET_RE);
-      if (bulletMatch) {
-        const indent = raw.length - raw.trimStart().length;
-        const depth = Math.min(3, Math.floor(indent / 2));
-        nodes.push({
-          id: id++,
-          label: cleanLabel(line.replace(BULLET_RE, "")),
-          headingLevel: null,
-          bulletLevel: depth,
-          page: page.pageNumber,
-        });
-        continue;
-      }
+/** Limits that keep the chart glanceable. */
+const MAX_TOPICS = 8;
+const POINTS_PER_TOPIC = 5;
+const MAX_POINTS = 24;
 
-      const heading = detectHeading(line);
-      if (heading) {
-        nodes.push({
-          id: id++,
-          label: cleanLabel(line),
-          headingLevel: heading,
-          bulletLevel: null,
-          page: page.pageNumber,
-        });
-        continue;
-      }
+type Kind = "heading" | "bullet" | "sentence";
 
-      if (line.length <= 120) {
-        nodes.push({
-          id: id++,
-          label: cleanLabel(line),
-          headingLevel: null,
-          bulletLevel: null,
-          page: page.pageNumber,
-        });
-      }
-    }
-  }
-  return nodes;
+interface Candidate {
+  text: string;
+  page: number;
+  kind: Kind;
+  /** Bullet nesting or heading level (1 = top). */
+  depth: number;
+  /** Index into the topic list, -1 before any heading. */
+  topicIndex: number;
+  score: number;
 }
 
-/** Numbered "1.2 Setup", ALL CAPS, "Title:" and Title Case headings. */
+/** "Numbered 1.2 Setup", ALL CAPS, "Title:" and Title Case headings. */
 function detectHeading(line: string): number | null {
   if (line.length > 80 || line.length < 3) return null;
 
-  const numbered = line.match(/^(\d+(?:\.\d+)*)[.)]?\s+\S/);
+  const numbered = line.match(/^(\d+(?:\.\d+)*)[.)]?\s+(\S.*)$/);
   if (numbered) {
     // Guard: "2023 saw growth" is prose, not a heading — require the first
-    // number group to be section-like (1-2 digits) or the text to be Title Case.
+    // number group to be section-like (1-2 digits) or Title Case, plus
+    // heading-like brevity (a numbered *sentence* is a list item, not a topic).
     const firstPart = numbered[1].split(".")[0];
-    const rest = line.slice(numbered[0].length).trim();
-    const titleCase = /^[A-Z]/.test(rest);
-    if (firstPart.length <= 2 || titleCase) {
+    const rest = numbered[2].trim();
+    const words = rest.split(/\s+/).length;
+    const sectionLike = firstPart.length <= 2 || /^[A-Z]/.test(rest);
+    const brief = rest.length <= 60 && words <= 8;
+    const sentencey = /\.$/.test(rest) && words > 4;
+    if (sectionLike && brief && !sentencey) {
       return Math.min(4, numbered[1].split(".").length);
     }
     return null;
@@ -109,23 +91,177 @@ function detectHeading(line: string): number | null {
 
   const words = line.split(/\s+/);
   const capitalized = words.filter((w) => /^[A-Z]/.test(w)).length;
-  if (
-    words.length >= 2 &&
-    words.length <= 9 &&
-    capitalized >= words.length * 0.6
-  ) {
+  if (words.length >= 2 && words.length <= 9 && capitalized >= words.length * 0.6) {
     return 3;
   }
   return null;
 }
 
-/** Max nodes before we keep only the structurally important ones. */
-const MAX_NODES = 40;
-/** Max characters of a label per line before wrapping. */
-const LABEL_LINE_CHARS = 26;
+/**
+ * Walks the raw lines of every page and reconstructs the units that carry
+ * meaning: headings (topics), bullets, and sentences (wrapped lines joined).
+ */
+function extractCandidates(pages: PageLines[]): {
+  candidates: Candidate[];
+  topics: string[];
+} {
+  const flat: { page: number; text: string }[] = [];
+  for (const page of pages) {
+    for (const raw of page.lines) {
+      const line = raw.replace(/\s+/g, " ").trim();
+      if (line.length > 1) flat.push({ page: page.pageNumber, text: line });
+    }
+  }
+
+  const candidates: Candidate[] = [];
+  const topics: string[] = [];
+  let topicIndex = -1;
+  let buf: string[] = [];
+  let bufPage = 1;
+
+  const flush = () => {
+    const text = buf.join(" ").replace(/\s+/g, " ").trim();
+    buf = [];
+    if (text.length < 20 || text.length > 420) return;
+    candidates.push({ text, page: bufPage, kind: "sentence", depth: 0, topicIndex, score: 0 });
+  };
+
+  let i = 0;
+  while (i < flat.length) {
+    const { page, text: line } = flat[i];
+
+    if (BOILERPLATE_RE.test(line)) {
+      flush();
+      i++;
+      continue;
+    }
+
+    const bulletMatch = line.match(BULLET_RE);
+    if (bulletMatch) {
+      flush();
+      // Numbered section headings ("1. Purpose") match BULLET_RE too —
+      // classify them as topics instead of list items.
+      const asHeading = detectHeading(line);
+      if (asHeading !== null) {
+        if (topics.length < MAX_TOPICS) {
+          topics.push(line);
+          topicIndex = topics.length - 1;
+        } else {
+          topicIndex = MAX_TOPICS - 1;
+        }
+        i++;
+        continue;
+      }
+      let text = line.replace(BULLET_RE, "").trim();
+      // Rejoin wrapped bullet continuation lines (lowercase start, no end mark).
+      let j = i + 1;
+      while (j < flat.length && text.length < 220 && !/[.!?]["')]?$/.test(text)) {
+        const next = flat[j].text;
+        if (
+          BULLET_RE.test(next) ||
+          BOILERPLATE_RE.test(next) ||
+          detectHeading(next) !== null ||
+          !/^[a-z(]/.test(next)
+        ) {
+          break;
+        }
+        text += " " + next;
+        j++;
+      }
+      i = j;
+      if (text.length >= 6) {
+        candidates.push({ text, page, kind: "bullet", depth: 0, topicIndex, score: 0 });
+      }
+      continue;
+    }
+
+    const heading = detectHeading(line);
+    if (heading !== null) {
+      flush();
+      if (topics.length < MAX_TOPICS) {
+        topics.push(line);
+        topicIndex = topics.length - 1;
+      } else {
+        topicIndex = MAX_TOPICS - 1; // overflow content lands in the last topic
+      }
+      i++;
+      continue;
+    }
+
+    // Plain prose: accumulate until terminal punctuation or size cap.
+    if (buf.length === 0) bufPage = page;
+    buf.push(line);
+    if (/[.!?]["')]?$/.test(line) || buf.join(" ").length > 320) flush();
+    i++;
+  }
+  flush();
+
+  return { candidates, topics };
+}
+
+/** Scores how much a candidate deserves a spot in the summary chart. */
+function scoreCandidate(c: Candidate): number {
+  if (c.kind === "heading") return 80 - (c.depth - 1) * 5;
+
+  let s = c.kind === "bullet" ? 34 : 16;
+  const signals = c.text.match(SIGNAL_RE)?.length ?? 0;
+  s += Math.min(20, signals * 5);
+  if (/\d/.test(c.text)) s += 8; // numbers, percentages, amounts carry facts
+  if (DECISION_RE.test(c.text)) s += 6;
+  const len = c.text.length;
+  if (len >= 30 && len <= 160) s += 5;
+  else if (len > 240) s -= 8;
+  return s;
+}
+
+/** Near-duplicate detection on the first six words. */
+function dedupKey(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, "")
+    .split(/\s+/)
+    .slice(0, 6)
+    .join(" ");
+}
+
+/** Condenses a sentence into a short, self-contained key point. */
+function distill(s: string): string {
+  let t = s.replace(/\s+/g, " ").trim();
+  // Characters that would break a quoted Mermaid label.
+  t = t.replace(/["`]/g, "'").replace(/[<>{}\[\]]/g, "");
+  // "Note that…" phrases run on without punctuation — strip them first.
+  t = t.replace(
+    /^(?:it (?:is|should be) (?:important|worth) (?:to note|noted) that|note that)\s+/i,
+    "",
+  );
+  t = t.replace(
+    /^(however|moreover|furthermore|therefore|thus|additionally|in addition|in fact|as a result|for example|for instance|in conclusion|in summary|overall|finally|firstly|secondly|thirdly|next|then|also|besides|meanwhile|consequently|specifically|particularly)[,;:]\s+/i,
+    "",
+  );
+  t = t.replace(/^(and|but|so|which|that|this|these|those)\s+/i, "");
+  t = t.replace(/[.\s]+$/, "");
+  if (t.length > 92) {
+    const cut = t.slice(0, 92);
+    let brk = Math.max(cut.lastIndexOf(","), cut.lastIndexOf(";"));
+    const dash = cut.lastIndexOf(" - ");
+    if (dash > brk) brk = dash;
+    t = (brk > 40 ? cut.slice(0, brk) : cut.slice(0, cut.lastIndexOf(" "))).trim() + "…";
+  }
+  if (t) t = t[0].toUpperCase() + t.slice(1);
+  return t.trim();
+}
+
+/** Keeps only characters that are safe inside a quoted Mermaid label. */
+function sanitize(s: string): string {
+  return s
+    .replace(/["`<>{}]/g, "")
+    .replace(/[\[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /** Wraps a label into short lines (Mermaid `<br/>`) for readable node boxes. */
-function wrapLabel(s: string, maxChars = LABEL_LINE_CHARS): string {
+function wrapLabel(s: string, maxChars = 30, maxLines = 3): string {
   const words = s.split(/\s+/);
   const out: string[] = [];
   let current = "";
@@ -138,138 +274,142 @@ function wrapLabel(s: string, maxChars = LABEL_LINE_CHARS): string {
     }
   }
   if (current) out.push(current);
-  // Hard-cap at 4 lines with ellipsis so boxes never balloon.
-  if (out.length > 4) {
-    return [...out.slice(0, 4).map((l, i) => (i === 3 ? `${l}…` : l))].join(
-      "<br/>",
-    );
+  if (out.length > maxLines) {
+    const kept = out.slice(0, maxLines);
+    kept[maxLines - 1] = kept[maxLines - 1].replace(/\s?\S*$/, "…");
+    return kept.join("<br/>");
   }
   return out.join("<br/>");
 }
 
-/** Builds a hierarchical flowchart from the detected structure. */
-export function buildFlowchart(nodes: StructureNode[]): FlowchartResult {
-  // Original ids stay stable even after de-dup filtering below.
-  const nodeById = new Map(nodes.map((n) => [n.id, n] as const));
-  const kept: StructureNode[] = [];
-  const seen = new Set<string>();
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+}
 
-  for (const n of nodes) {
-    if (n.label.length < 2) continue;
-    const key = n.label.toLowerCase();
+/**
+ * Builds a key-point flowchart: root → topic nodes → distilled key points.
+ * Falls back to a single explanatory node when nothing readable is found.
+ */
+export function buildKeyPointFlowchart(
+  pages: PageLines[],
+  title?: string,
+): FlowchartResult {
+  const { candidates, topics: rawTopics } = extractCandidates(pages);
+
+  // Drop junk rows (tables, code, symbol soup) and near-duplicates.
+  const seen = new Set<string>();
+  const pool: Candidate[] = [];
+  for (const c of candidates) {
+    const alpha = (c.text.match(/[a-zA-Z]/g) ?? []).length;
+    if (alpha < c.text.length * 0.5) continue;
+    const key = dedupKey(c.text);
     if (seen.has(key)) continue;
     seen.add(key);
-    kept.push(n);
+    pool.push({ ...c, score: scoreCandidate(c) });
   }
 
-  // Too many nodes → unreadable hairball. Keep the skeleton: all headings,
-  // then bullets, then prose, until under the cap.
-  if (kept.length > MAX_NODES) {
-    const score = (n: StructureNode) =>
-      n.headingLevel !== null
-        ? 0
-        : n.bulletLevel !== null
-          ? 1
-          : 2;
-    const important = kept
-      .map((n, i) => ({ n, i, s: score(n) }))
-      .sort((a, b) => a.s - b.s || a.i - b.i)
-      .slice(0, MAX_NODES)
-      .sort((a, b) => a.i - b.i)
-      .map((x) => x.n);
-    kept.length = 0;
-    kept.push(...important);
-  }
+  const sentences = pool.filter((c) => c.kind !== "heading").length;
 
-  if (kept.length === 0) {
+  if (pool.length === 0) {
     return {
-      mermaid: 'flowchart TD\n  A["No structured content detected"]',
-      nodes: [],
-      stats: { pages: 0, headings: 0, bullets: 0, nodes: 0 },
+      mermaid:
+        'flowchart TD\n  A["No key points detected — the document may be empty or unreadable"]',
+      keyPoints: [],
+      topics: [],
+      stats: { pages: pages.length, sentences: 0, keyPoints: 0, topics: 0 },
     };
   }
 
-  const lines: string[] = ["flowchart TD"];
-  const idOf = (n: StructureNode) => `N${n.id}`;
-  // Most recent node id at each nesting depth (headings 0-3, bullets 10-13).
-  const lastAtDepth = new Map<number, number>();
-  let lastAny: number | null = null;
-  let stopCounter = 0;
-
-  for (const node of kept) {
-    let depth: number;
-    if (node.headingLevel !== null) depth = node.headingLevel - 1;
-    else if (node.bulletLevel !== null) depth = 10 + node.bulletLevel;
-    else depth = 20;
-
-    // Find the parent: nearest previous node at a shallower depth.
-    let parentId: number | null = null;
-    let parentDepth = -1;
-    for (const [d, id] of lastAtDepth) {
-      if (d < depth && d > parentDepth) {
-        parentDepth = d;
-        parentId = id;
-      }
-    }
-    if (parentId === null && lastAny !== null && lastAny !== node.id) {
-      parentId = lastAny;
-    }
-
-    // Emit node with a shape matching its role.
-    const label = wrapLabel(mQuote(node.label));
-    if (node.headingLevel !== null) {
-      lines.push(`  ${idOf(node)}(["${label}"])`);
-    } else if (node.bulletLevel !== null && DECISION_RE.test(node.label)) {
-      lines.push(`  ${idOf(node)}{"${label}"}`);
-    } else {
-      lines.push(`  ${idOf(node)}["${label}"]`);
-    }
-
-    // Emit edge.
-    if (parentId !== null) {
-      const parentNode = nodeById.get(parentId);
-      if (parentNode) {
-        if (node.bulletLevel !== null && DECISION_RE.test(node.label)) {
-          lines.push(`  ${idOf(parentNode)} -->|Yes| ${idOf(node)}`);
-          lines.push(`  ${idOf(parentNode)} -->|No| S${stopCounter}["Stop"]`);
-          stopCounter++;
-        } else {
-          lines.push(`  ${idOf(parentNode)} --> ${idOf(node)}`);
-        }
-      }
-    }
-
-    lastAtDepth.set(depth, node.id);
-    // Clear deeper recorded depths so stale children don't re-attach.
-    for (const d of [...lastAtDepth.keys()]) {
-      if (d > depth) lastAtDepth.delete(d);
-    }
-    lastAny = node.id;
+  // Topics in document order; each keeps only its best points.
+  const byTopic = new Map<number, Candidate[]>();
+  for (const c of pool) {
+    const idx = c.kind === "heading" ? -1 : Math.max(0, c.topicIndex);
+    if (c.kind === "heading") continue; // headings become topic nodes
+    const list = byTopic.get(idx) ?? [];
+    list.push(c);
+    byTopic.set(idx, list);
   }
 
-  const headings = kept.filter((n) => n.headingLevel !== null).length;
-  const bullets = kept.filter((n) => n.bulletLevel !== null).length;
+  // Cap per-topic, then cap globally by score.
+  let shortlist: Candidate[] = [];
+  for (const [, list] of byTopic) {
+    list.sort((a, b) => b.score - a.score);
+    shortlist.push(...list.slice(0, POINTS_PER_TOPIC));
+  }
+  shortlist.sort((a, b) => b.score - a.score);
+  shortlist = shortlist.slice(0, MAX_POINTS);
+  // Restore document order inside the final selection.
+  const orderKey = (c: Candidate) => c.topicIndex * 10000 + (c.page * 1000);
+  shortlist.sort((a, b) => orderKey(a) - orderKey(b));
+
+  const topicTitles = rawTopics.map((t) => truncate(sanitize(t), 44));
+  const hasTopics = topicTitles.length > 0;
+
+  const rootLabel =
+    truncate(sanitize(title ?? ""), 48) || topicTitles[0] || "Document key points";
+
+  // Assemble Mermaid.
+  const lines: string[] = ["flowchart TD"];
+  lines.push(`  R(["${wrapLabel(rootLabel)}"])`);
+
+  const pointNodes: { topicIdx: number; id: string; decision: boolean }[] = [];
+  let k = 0;
+  shortlist.forEach((c) => {
+    const id = `K${k++}`;
+    const label = wrapLabel(distill(c.text));
+    const decision = DECISION_RE.test(c.text);
+    lines.push(decision ? `  ${id}{"${label}"}` : `  ${id}["${label}"]`);
+    pointNodes.push({ topicIdx: Math.max(0, c.topicIndex), id, decision });
+  });
+
+  if (hasTopics) {
+    // Topic nodes only for topics that actually received points.
+    const usedTopics = new Set(pointNodes.map((p) => p.topicIdx));
+    for (const [idx, t] of topicTitles.entries()) {
+      if (!usedTopics.has(idx)) continue;
+      lines.push(`  T${idx}(["${wrapLabel(t)}"])`);
+      lines.push(`  R --> T${idx}`);
+    }
+    for (const p of pointNodes) {
+      lines.push(`  T${p.topicIdx} --> ${p.id}`);
+    }
+  } else {
+    // No headings anywhere → key points hang directly off the root.
+    for (const p of pointNodes) {
+      lines.push(`  R --> ${p.id}`);
+    }
+  }
+
+  // Styling hooks that match the app's indigo-on-black palette.
+  lines.push(
+    "  classDef root fill:#1d2a5c,stroke:#8b9cf9,stroke-width:2px,color:#f4f7ff;",
+    "  classDef topic fill:#182451,stroke:#6366f1,stroke-width:2px,color:#e6ebf7;",
+    "  classDef point fill:#121a33,stroke:#818cf8,stroke-width:1.5px,color:#dbe3f8;",
+    "  classDef decision fill:#241b45,stroke:#a78bfa,stroke-width:1.5px,color:#efeaff;",
+  );
+  lines.push("  class R root");
+  const topicIds = hasTopics
+    ? topicTitles
+        .map((_, idx) => `T${idx}`)
+        .filter((id) => lines.some((l) => l.includes(`  ${id}([`)))
+    : [];
+  if (topicIds.length) lines.push(`  class ${topicIds.join(",")} topic`);
+  const plainIds = pointNodes.filter((p) => !p.decision).map((p) => p.id);
+  const decisionIds = pointNodes.filter((p) => p.decision).map((p) => p.id);
+  if (plainIds.length) lines.push(`  class ${plainIds.join(",")} point`);
+  if (decisionIds.length) lines.push(`  class ${decisionIds.join(",")} decision`);
+
+  const maxPage = Math.max(1, ...shortlist.map((c) => c.page), pages.length);
 
   return {
     mermaid: lines.join("\n"),
-    nodes: kept,
+    keyPoints: shortlist.map((c) => distill(c.text)),
+    topics: hasTopics ? topicTitles : [],
     stats: {
-      pages: Math.max(...kept.map((n) => n.page)),
-      headings,
-      bullets,
-      nodes: kept.length,
+      pages: maxPage,
+      sentences,
+      keyPoints: shortlist.length,
+      topics: topicIds.length,
     },
   };
-}
-
-function cleanLabel(s: string): string {
-  return s
-    .replace(/["`]/g, "'")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 90);
-}
-
-function mQuote(s: string): string {
-  return s.replace(/"/g, "'");
 }

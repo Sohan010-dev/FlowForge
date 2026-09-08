@@ -26,11 +26,7 @@ import { Progress } from "@/components/ui/progress";
 import { snapdom } from "@zumer/snapdom";
 import { SocialLinks } from "@/components/SocialLinks";
 import { extractText, type ExtractProgress } from "@/lib/extract";
-import {
-  buildFlowchart,
-  detectStructure,
-  type FlowchartResult,
-} from "@/lib/flowchart";
+import { buildKeyPointFlowchart, type FlowchartResult } from "@/lib/flowchart";
 
 /** Zoom that fits the diagram to the canvas width, capped for readability. */
 function computeFitZoom(
@@ -265,9 +261,8 @@ export default function Converter() {
       // Yield a frame so the loading state paints before heavy work.
       await new Promise((r) => requestAnimationFrame(() => r(null)));
 
-      const nodes = detectStructure(pages);
-      const result = buildFlowchart(nodes);
-      if (result.nodes.length === 0) {
+      const result = buildKeyPointFlowchart(pages, file.name);
+      if (result.stats.keyPoints === 0) {
         setStage({
           kind: "error",
           message:
@@ -497,9 +492,9 @@ export default function Converter() {
                       {stage.fileName}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {stage.result.stats.nodes} nodes ·{" "}
-                      {stage.result.stats.headings} headings ·{" "}
-                      {stage.result.stats.bullets} list items ·{" "}
+                      {stage.result.stats.keyPoints} key points ·{" "}
+                      {stage.result.stats.topics} topics ·{" "}
+                      {stage.result.stats.pages} pages ·{" "}
                       {stage.sourceKind.toUpperCase()}
                     </p>
                   </div>
@@ -547,6 +542,30 @@ export default function Converter() {
                     <RotateCcw className="size-3.5" /> Reset
                   </Button>
                 </div>
+
+                {stage.result.keyPoints.length > 0 ? (
+                  <div className="rounded-lg border border-white/10 bg-white/5 p-3.5">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/90">
+                      Key points at a glance
+                    </p>
+                    <ul className="mt-2.5 space-y-2">
+                      {stage.result.keyPoints.slice(0, 8).map((p, i) => (
+                        <li
+                          key={i}
+                          className="flex gap-2 text-xs leading-relaxed text-muted-foreground"
+                        >
+                          <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary/70 shadow-[0_0_6px_rgba(99,102,241,0.8)]" />
+                          {p}
+                        </li>
+                      ))}
+                    </ul>
+                    {stage.result.keyPoints.length > 8 ? (
+                      <p className="mt-2 text-[11px] text-muted-foreground/70">
+                        +{stage.result.keyPoints.length - 8} more on the chart
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -558,8 +577,8 @@ export default function Converter() {
             <ul className="mt-3 space-y-2.5 text-sm text-muted-foreground">
               {[
                 "Extracts every text line locally with pdf.js",
-                "Detects headings, numbered sections & bullets",
-                "Builds a hierarchy and renders Mermaid",
+                "Reconstructs sentences and scores importance",
+                "Distills the top points into a readable chart",
               ].map((t, i) => (
                 <li key={t} className="flex gap-2.5">
                   <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-primary/30 bg-primary/10 text-[10px] font-semibold text-primary">
