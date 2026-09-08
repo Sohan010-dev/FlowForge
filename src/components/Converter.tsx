@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { toast } from "sonner";
-import {
+import { toast } from "sonner";import {
   AlertCircle,
   Check,
   ChevronLeft,
@@ -20,10 +19,8 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import mermaid from "mermaid";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { snapdom } from "@zumer/snapdom";
 import { SocialLinks } from "@/components/SocialLinks";
 import { extractText, type ExtractProgress } from "@/lib/extract";
 import { buildKeyPointFlowchart, type FlowchartResult } from "@/lib/flowchart";
@@ -62,23 +59,15 @@ type Stage =
 
 let mermaidId = 0;
 
-export default function Converter() {
-  const [stage, setStage] = useState<Stage>({ kind: "idle" });
-  const [dragActive, setDragActive] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const svgHostRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const fsScrollRef = useRef<HTMLDivElement>(null);
-  const naturalSizeRef = useRef<{ w: number; h: number } | null>(null);
-  const svgHtmlRef = useRef<string>("");
-
-  // Configure mermaid once for the dark blue theme.
-  useEffect(() => {
-    mermaid.initialize({
+/**
+ * Mermaid is multi-MB, so it is lazy-loaded (dynamic import) the first time
+ * a flowchart is actually rendered. This keeps it out of the initial bundle
+ * and out of the production build's peak memory.
+ */
+let mermaidLoader: Promise<(typeof import("mermaid"))["default"]> | null = null;
+const loadMermaid = () => {
+  mermaidLoader ??= import("mermaid").then((m) => {
+    m.default.initialize({
       startOnLoad: false,
       theme: "base",
       securityLevel: "loose",
@@ -107,7 +96,24 @@ export default function Converter() {
         rankSpacing: 55,
       },
     });
-  }, []);
+    return m.default;
+  });
+  return mermaidLoader;
+};
+
+export default function Converter() {
+  const [stage, setStage] = useState<Stage>({ kind: "idle" });
+  const [dragActive, setDragActive] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const svgHostRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const fsScrollRef = useRef<HTMLDivElement>(null);
+  const naturalSizeRef = useRef<{ w: number; h: number } | null>(null);
+  const svgHtmlRef = useRef<string>("");
 
   const reset = () => {
     setStage({ kind: "idle" });
@@ -272,6 +278,7 @@ export default function Converter() {
       }
 
       const renderId = `mmd-${++mermaidId}`;
+      const mermaid = await loadMermaid();
       const { svg } = await mermaid.render(renderId, result.mermaid);
       svgHtmlRef.current = svg;
       if (svgHostRef.current) svgHostRef.current.innerHTML = svg;
@@ -327,6 +334,7 @@ export default function Converter() {
     if (stage.kind !== "done" || !svgRef.current) return;
     try {
       toast.loading("Rendering image…", { id: "save" });
+      const { snapdom } = await import("@zumer/snapdom");
       await snapdom.download(svgRef.current, {
         format: "png",
         scale: 2,
