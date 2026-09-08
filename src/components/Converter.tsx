@@ -4,9 +4,13 @@ import { toast } from "sonner";
 import {
   AlertCircle,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Download,
+  Expand,
   FileText,
+  Minimize2,
   Workflow,
   Loader2,
   Maximize2,
@@ -54,12 +58,15 @@ export default function Converter() {
   const [stage, setStage] = useState<Stage>({ kind: "idle" });
   const [dragActive, setDragActive] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const svgHostRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fsScrollRef = useRef<HTMLDivElement>(null);
   const naturalSizeRef = useRef<{ w: number; h: number } | null>(null);
+  const svgHtmlRef = useRef<string>("");
 
   // Configure mermaid once for the dark blue theme.
   useEffect(() => {
@@ -98,21 +105,26 @@ export default function Converter() {
     setStage({ kind: "idle" });
     setZoom(1);
     naturalSizeRef.current = null;
+    svgHtmlRef.current = "";
     if (svgHostRef.current) svgHostRef.current.innerHTML = "";
   };
 
   /** Sizes the SVG element to natural dimensions × zoom so scrolling works. */
   const applyZoom = (z: number) => {
-    const svg = svgRef.current;
     const nat = naturalSizeRef.current;
-    if (!svg || !nat) return;
+    if (!nat) return;
+    const svg =
+      (isFullscreen ? fsScrollRef.current : svgHostRef.current)?.querySelector(
+        "svg",
+      ) ?? svgRef.current;
+    if (!svg) return;
     svg.style.width = `${Math.round(nat.w * z)}px`;
     svg.style.height = `${Math.round(nat.h * z)}px`;
   };
 
   useEffect(() => {
     applyZoom(zoom);
-  }, [zoom]);
+  }, [zoom, isFullscreen]);
 
   const fitToWidth = () => {
     const z = computeFitZoom(
@@ -123,6 +135,33 @@ export default function Converter() {
     setZoom(z);
     applyZoom(z);
   };
+
+  /** Scrolls the active canvas sideways (dir: -1 left, 1 right). */
+  const panHorizontally = (dir: -1 | 1) => {
+    const el = isFullscreen ? fsScrollRef.current : scrollRef.current;
+    el?.scrollBy({ left: dir * 380, behavior: "smooth" });
+  };
+
+  /** CSS-overlay fullscreen — works even where the Fullscreen API is blocked. */
+  const toggleFullscreen = () => {
+    setIsFullscreen((v) => !v);
+    // Re-fit once the canvas has its new (much larger) size.
+    window.setTimeout(fitToWidth, 80);
+  };
+
+  // Escape exits fullscreen; lock page scroll behind the overlay.
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [isFullscreen]);
 
   const processFile = async (file: File) => {
     if (
@@ -168,6 +207,7 @@ export default function Converter() {
 
       const renderId = `mmd-${++mermaidId}`;
       const { svg } = await mermaid.render(renderId, result.mermaid);
+      svgHtmlRef.current = svg;
       if (svgHostRef.current) svgHostRef.current.innerHTML = svg;
       svgRef.current = svgHostRef.current?.querySelector("svg") ?? null;
       // Cache natural size and render at a readable default zoom.
@@ -411,7 +451,13 @@ export default function Converter() {
         </section>
 
         {/* Right: canvas */}
-        <section className="glass relative flex min-h-[520px] flex-col overflow-hidden rounded-2xl shadow-[0_20px_60px_-30px_rgba(0,0,0,0.8)] lg:min-h-0">
+        <section
+          className={
+            isFullscreen
+              ? "hidden"
+              : "glass relative flex min-h-[520px] flex-col overflow-hidden rounded-2xl shadow-[0_20px_60px_-30px_rgba(0,0,0,0.8)] lg:min-h-0"
+          }
+        >
           <div className="flex items-center justify-between border-b border-white/5 px-4 py-2.5">
             <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
               Flowchart canvas
@@ -448,6 +494,16 @@ export default function Converter() {
                   title="Fit to width"
                 >
                   <Maximize2 className="size-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7"
+                  onClick={toggleFullscreen}
+                  aria-label="Fullscreen"
+                  title="Fullscreen"
+                >
+                  <Expand className="size-3.5" />
                 </Button>
               </div>
             ) : null}
@@ -490,13 +546,154 @@ export default function Converter() {
             >
               <div
                 ref={svgHostRef}
-                className="mermaid-canvas flex w-full justify-center transition-transform duration-200"
-                style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}
+                className="mermaid-canvas flex justify-center"
+                style={{ transformOrigin: "top center" }}
               />
             </motion.div>
           </div>
+
+          {/* Side-scroll controls (normal view) */}
+          {stage.kind === "done" ? (
+            <div className="pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full glass px-2.5 py-1.5 shadow-lg">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="pointer-events-auto size-7 rounded-full"
+                onClick={() => panHorizontally(-1)}
+                aria-label="Scroll left"
+                title="Scroll left"
+              >
+                <ChevronLeft className="size-3.5" />
+              </Button>
+              <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+                Pan
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="pointer-events-auto size-7 rounded-full"
+                onClick={() => panHorizontally(1)}
+                aria-label="Scroll right"
+                title="Scroll right"
+              >
+                <ChevronRight className="size-3.5" />
+              </Button>
+            </div>
+          ) : null}
         </section>
       </main>
+
+      {/* Fullscreen canvas overlay */}
+      {isFullscreen && stage.kind === "done" ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 z-[100] flex flex-col bg-background/95 backdrop-blur-xl"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Fullscreen flowchart view"
+        >
+          <div className="flex items-center justify-between border-b border-white/5 px-4 py-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-blue-600">
+                <Workflow className="size-4 text-white" strokeWidth={2.2} />
+              </span>
+              <span className="truncate text-sm font-medium">
+                {stage.fileName.replace(/\.pdf$/i, "")} — flowchart
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={() => setZoom((z) => Math.max(0.4, z - 0.15))}
+                aria-label="Zoom out"
+              >
+                <ZoomOut className="size-4" />
+              </Button>
+              <span className="w-14 text-center text-xs tabular-nums text-muted-foreground">
+                {Math.round(zoom * 100)}%
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={() => setZoom((z) => Math.min(2.5, z + 0.15))}
+                aria-label="Zoom in"
+              >
+                <ZoomIn className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={fitToWidth}
+                aria-label="Fit to width"
+                title="Fit to width"
+              >
+                <Maximize2 className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                onClick={() => setIsFullscreen(false)}
+                aria-label="Exit fullscreen"
+                title="Exit fullscreen (Esc)"
+              >
+                <Minimize2 className="size-4" />
+              </Button>
+            </div>
+          </div>
+
+          <div
+            ref={fsScrollRef}
+            className="canvas-scroll relative flex-1 overflow-auto grid-bg"
+          >
+            <div className="flex min-h-full w-max min-w-full items-start justify-center p-10">
+              <div
+                className="mermaid-canvas flex justify-center"
+                dangerouslySetInnerHTML={{
+                  __html: svgHtmlRef.current ?? "",
+                }}
+                style={{
+                  transform: `scale(${zoom})`,
+                  transformOrigin: "top center",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Side-scroll controls */}
+          <div className="pointer-events-none absolute bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full glass px-3 py-2 shadow-lg">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="pointer-events-auto size-8 rounded-full"
+              onClick={() => panHorizontally(-1)}
+              aria-label="Scroll left"
+              title="Scroll left"
+            >
+              <ChevronLeft className="size-4" />
+            </Button>
+            <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+              Pan
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="pointer-events-auto size-8 rounded-full"
+              onClick={() => panHorizontally(1)}
+              aria-label="Scroll right"
+              title="Scroll right"
+            >
+              <ChevronRight className="size-4" />
+            </Button>
+          </div>
+        </motion.div>
+      ) : null}
 
       <footer className="border-t border-white/5 py-6 text-center text-xs text-muted-foreground">
         FlowForge · 100% client-side · Built with pdf.js + Mermaid
