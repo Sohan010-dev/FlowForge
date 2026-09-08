@@ -1,5 +1,5 @@
 import Converter from "@/components/Converter";
 
-export default function Dashboard() {
+export default function AppPage() {
   return <Converter />;
 }
