@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { motion } from "framer-motion";
 
 const LINKEDIN_URL = "https://www.linkedin.com/in/sohanbanerjee-offcl/";
 const GITHUB_URL = "https://github.com/Sohan010-dev";
@@ -27,32 +27,41 @@ export function GitHubIcon() {
   );
 }
 
-export function SocialLinks({ className = "" }: { className?: string }) {
-  const [hovered, setHovered] = useState<string | null>(null);
+const links = [
+  { key: "in", href: LINKEDIN_URL, label: "LinkedIn", Icon: LinkedInIcon },
+  { key: "gh", href: GITHUB_URL, label: "GitHub", Icon: GitHubIcon },
+] as const;
 
+/**
+ * Social links with a springy hover animation: the icon pops and glows
+ * while a soft blue halo blooms behind it.
+ */
+export function SocialLinks({ className = "" }: { className?: string }) {
   return (
     <div className={`flex items-center gap-1.5 ${className}`}>
-      {(
-        [
-          { key: "in", href: LINKEDIN_URL, label: "LinkedIn", Icon: LinkedInIcon },
-          { key: "gh", href: GITHUB_URL, label: "GitHub", Icon: GitHubIcon },
-        ] as const
-      ).map(({ key, href, label, Icon }) => (
-        <a
+      {links.map(({ key, href, label, Icon }) => (
+        <motion.a
           key={key}
           href={href}
           target="_blank"
           rel="noopener noreferrer"
           aria-label={label}
           title={label}
-          onMouseEnter={() => setHovered(key)}
-          onMouseLeave={() => setHovered(null)}
-          className={`flex size-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-muted-foreground backdrop-blur transition-all duration-200 hover:border-primary/50 hover:text-primary ${
-            hovered === key ? "shadow-[0_0_18px_rgba(99,102,241,0.35)]" : ""
-          }`}
+          whileHover={{ scale: 1.18, rotate: key === "gh" ? -6 : 6 }}
+          whileTap={{ scale: 0.92 }}
+          transition={{ type: "spring", stiffness: 400, damping: 15 }}
+          className="group relative flex size-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-muted-foreground backdrop-blur transition-colors duration-300 hover:border-primary/60 hover:text-primary"
         >
-          <Icon />
-        </a>
+          {/* Glow halo that blooms on hover */}
+          <span className="pointer-events-none absolute inset-0 rounded-lg opacity-0 shadow-[0_0_22px_6px_rgba(99,102,241,0.45)] transition-opacity duration-300 group-hover:opacity-100" />
+          <motion.span
+            className="relative z-10 flex"
+            whileHover={{ scale: 1.1 }}
+            transition={{ type: "spring", stiffness: 500, damping: 12 }}
+          >
+            <Icon />
+          </motion.span>
+        </motion.a>
       ))}
     </div>
   );

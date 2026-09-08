@@ -15,6 +15,7 @@ import {
   Loader2,
   Maximize2,
   RotateCcw,
+  Save,
   Upload,
   ZoomIn,
   ZoomOut,
@@ -23,7 +24,7 @@ import mermaid from "mermaid";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { SocialLinks } from "@/components/SocialLinks";
-import { extractPdfText } from "@/lib/pdf";
+import { extractText, type ExtractProgress } from "@/lib/extract";
 import {
   buildFlowchart,
   detectStructure,
@@ -48,9 +49,19 @@ function computeFitZoom(
 type Stage =
   | { kind: "idle" }
   | { kind: "error"; message: string }
-  | { kind: "parsing"; page: number; total: number }
+  | {
+      kind: "parsing";
+      page: number;
+      total: number;
+      label: string;
+    }
   | { kind: "rendering" }
-  | { kind: "done"; result: FlowchartResult; fileName: string };
+  | {
+      kind: "done";
+      result: FlowchartResult;
+      fileName: string;
+      sourceKind: string;
+    };
 
 let mermaidId = 0;
 
@@ -142,6 +153,42 @@ export default function Converter() {
     el?.scrollBy({ left: dir * 380, behavior: "smooth" });
   };
 
+  /**
+   * Cursor drag-to-pan: hold and move anywhere on the canvas. Works in both
+   * normal and fullscreen views (mouse + touch via pointer events).
+   */
+  const dragState = useRef<{ active: boolean; x: number; y: number } | null>(
+    null,
+  );
+  const onPanPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Don't hijack clicks on interactive children (none expected, but safe).
+    if ((e.target as HTMLElement).closest("button, a")) return;
+    const el = isFullscreen ? fsScrollRef.current : scrollRef.current;
+    if (!el) return;
+    dragState.current = { active: true, x: e.clientX, y: e.clientY };
+    el.setPointerCapture?.(e.pointerId);
+    el.style.cursor = "grabbing";
+  };
+  const onPanPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const st = dragState.current;
+    if (!st?.active) return;
+    const el = isFullscreen ? fsScrollRef.current : scrollRef.current;
+    if (!el) return;
+    el.scrollLeft -= e.clientX - st.x;
+    el.scrollTop -= e.clientY - st.y;
+    st.x = e.clientX;
+    st.y = e.clientY;
+  };
+  const endPan = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragState.current?.active) return;
+    dragState.current = null;
+    const el = isFullscreen ? fsScrollRef.current : scrollRef.current;
+    if (el) {
+      el.style.cursor = "";
+      el.releasePointerCapture?.(e.pointerId);
+    }
+  };
+
   /** CSS-overlay fullscreen — works even where the Fullscreen API is blocked. */
   const toggleFullscreen = () => {
     setIsFullscreen((v) => !v);
@@ -164,31 +211,54 @@ export default function Converter() {
   }, [isFullscreen]);
 
   const processFile = async (file: File) => {
-    if (
-      file.type !== "application/pdf" &&
-      !file.name.toLowerCase().endsWith(".pdf")
-    ) {
+    const name = file.name.toLowerCase();
+    const supported =
+      file.type === "application/pdf" ||
+      name.endsWith(".pdf") ||
+      name.endsWith(".docx") ||
+      name.endsWith(".doc") ||
+      file.type.startsWith("image/") ||
+      /\.(png|jpe?g|gif|webp|bmp)$/.test(name);
+    if (!supported) {
       setStage({
         kind: "error",
-        message: `"${file.name}" is not a PDF. Please upload a .pdf file.`,
+        message: `"${file.name}" isn't a supported format. Upload a PDF, Word (doc/docx), JPG or PNG file.`,
       });
-      toast.error("Only PDF files are supported");
+      toast.error("Unsupported file type");
       return;
     }
     if (file.size > 25 * 1024 * 1024) {
       setStage({
         kind: "error",
-        message: "That PDF is over 25 MB. Try a smaller file.",
+        message: "That file is over 25 MB. Try a smaller one.",
       });
       toast.error("File too large (max 25 MB)");
       return;
     }
 
     try {
-      setStage({ kind: "parsing", page: 0, total: 0 });
-      const { pages } = await extractPdfText(file, (page, total) =>
-        setStage({ kind: "parsing", page, total }),
-      );
+      const onProgress = (p: ExtractProgress) => {
+        if (p.kind === "ocr") {
+          setStage({
+            kind: "parsing",
+            page: p.page,
+            total: p.total,
+            label:
+              p.total === 100
+                ? "Reading text from image (OCR)…"
+                : `Reading page ${p.page} of ${p.total}…`,
+          });
+        } else {
+          setStage({
+            kind: "parsing",
+            page: 0,
+            total: 0,
+            label: p.detail ?? "Reading file…",
+          });
+        }
+      };
+      setStage({ kind: "parsing", page: 0, total: 0, label: "Opening file…" });
+      const { pages, sourceKind } = await extractText(file, onProgress);
 
       setStage({ kind: "rendering" });
       // Yield a frame so the loading state paints before heavy work.
@@ -200,7 +270,7 @@ export default function Converter() {
         setStage({
           kind: "error",
           message:
-            "No readable text found. This PDF may be scanned images or empty — FlowForge needs selectable text.",
+            "No readable text found — the file may be empty, corrupted, or a scan with no selectable text.",
         });
         return;
       }
@@ -218,16 +288,16 @@ export default function Converter() {
       const defaultZoom = computeFitZoom(w, h, scrollRef.current);
       setZoom(defaultZoom);
       applyZoom(defaultZoom);
-      setStage({ kind: "done", result, fileName: file.name });
+      setStage({ kind: "done", result, fileName: file.name, sourceKind });
       toast.success("Flowchart generated");
     } catch (err) {
       console.error(err);
       setStage({
         kind: "error",
         message:
-          err instanceof Error && /password/i.test(err.message)
-            ? "This PDF is password-protected."
-            : "Something went wrong while reading that PDF. It may be corrupted or use an unsupported encoding.",
+          err instanceof Error
+            ? err.message
+            : "Something went wrong while reading that file.",
       });
       toast.error("Processing failed");
     }
@@ -250,6 +320,33 @@ export default function Converter() {
     if (stage.kind !== "done") return;
     await navigator.clipboard.writeText(stage.result.mermaid);
     toast.success("Mermaid syntax copied");
+  };
+
+  /** Saves the rendered flowchart as an SVG file — no signup, fully local. */
+  const saveFlowchart = () => {
+    if (stage.kind !== "done" || !svgRef.current) return;
+    const clone = svgRef.current.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    // Reset any zoom applied inline so the file is the natural diagram size.
+    clone.style.width = "";
+    clone.style.height = "";
+    clone.removeAttribute("width");
+    clone.removeAttribute("height");
+    const vb = clone.viewBox?.baseVal;
+    if (vb && vb.width && vb.height) {
+      clone.setAttribute("width", String(vb.width));
+      clone.setAttribute("height", String(vb.height));
+    }
+    const blob = new Blob([clone.outerHTML], {
+      type: "image/svg+xml;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = stage.fileName.replace(/\.[^.]+$/, "") + "-flowchart.svg";
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Flowchart saved");
   };
 
   const downloadSvg = () => {
@@ -299,10 +396,10 @@ export default function Converter() {
         <section className="flex flex-col gap-5">
           <div className="glass rounded-2xl p-5 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.8)]">
             <h1 className="font-display text-xl font-semibold tracking-tight">
-              PDF → Flowchart
+              PDF · Word · Image → Flowchart
             </h1>
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              Drop a PDF and watch it become a diagram. Everything runs in your
+              Drop a file and watch it become a diagram. Everything runs in your
               browser — no uploads, no AI, no API keys.
             </p>
 
@@ -323,7 +420,7 @@ export default function Converter() {
                 <input
                   ref={inputRef}
                   type="file"
-                  accept="application/pdf,.pdf"
+                  accept=".pdf,.doc,.docx,image/png,image/jpeg,image/jpg,image/webp"
                   className="sr-only"
                   onChange={onPick}
                 />
@@ -337,10 +434,10 @@ export default function Converter() {
                   <Upload className="size-5" />
                 </span>
                 <span className="text-sm font-medium">
-                  {dragActive ? "Drop it here" : "Drag & drop your PDF"}
+                  {dragActive ? "Drop it here" : "Drag & drop your file"}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  or click to browse · max 25 MB
+                  PDF · DOCX · DOC · JPG · PNG · max 25 MB
                 </span>
               </label>
             ) : null}
@@ -358,9 +455,7 @@ export default function Converter() {
                   <Loader2 className="size-4 animate-spin text-primary" />
                   <span>
                     {stage.kind === "parsing"
-                      ? stage.total > 0
-                        ? `Reading page ${stage.page} of ${stage.total}…`
-                        : "Opening PDF…"
+                      ? stage.label
                       : "Laying out flowchart…"}
                   </span>
                 </div>
@@ -386,12 +481,21 @@ export default function Converter() {
                     <p className="text-xs text-muted-foreground">
                       {stage.result.stats.nodes} nodes ·{" "}
                       {stage.result.stats.headings} headings ·{" "}
-                      {stage.result.stats.bullets} list items
+                      {stage.result.stats.bullets} list items ·{" "}
+                      {stage.sourceKind.toUpperCase()}
                     </p>
                   </div>
                   <Check className="ml-auto size-4 shrink-0 text-emerald-400" />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={saveFlowchart}
+                    className="col-span-2 gap-1.5 border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary"
+                  >
+                    <Save className="size-3.5" /> Save flowchart
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -511,7 +615,12 @@ export default function Converter() {
 
           <div
             ref={scrollRef}
-            className="canvas-scroll relative flex-1 overflow-auto grid-bg"
+            className="canvas-scroll cursor-grab relative flex-1 overflow-auto grid-bg active:cursor-grabbing"
+            onPointerDown={onPanPointerDown}
+            onPointerMove={onPanPointerMove}
+            onPointerUp={endPan}
+            onPointerCancel={endPan}
+            onPointerLeave={endPan}
           >
             {stage.kind === "idle" ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 p-10 text-center">
@@ -520,8 +629,8 @@ export default function Converter() {
                 </div>
                 <p className="text-sm font-medium">Your flowchart appears here</p>
                 <p className="max-w-xs text-xs leading-relaxed text-muted-foreground">
-                  Upload a PDF on the left — reports, plans, specs and docs with
-                  clear structure work best.
+                  Upload a PDF, Word doc or image on the left — reports, plans,
+                  specs and photos of notes all work.
                 </p>
               </div>
             ) : null}
@@ -639,6 +748,16 @@ export default function Converter() {
                 variant="ghost"
                 size="icon"
                 className="size-8"
+                onClick={saveFlowchart}
+                aria-label="Save flowchart"
+                title="Save flowchart (SVG)"
+              >
+                <Save className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
                 onClick={() => setIsFullscreen(false)}
                 aria-label="Exit fullscreen"
                 title="Exit fullscreen (Esc)"
@@ -650,7 +769,12 @@ export default function Converter() {
 
           <div
             ref={fsScrollRef}
-            className="canvas-scroll relative flex-1 overflow-auto grid-bg"
+            className="canvas-scroll cursor-grab relative flex-1 overflow-auto grid-bg active:cursor-grabbing"
+            onPointerDown={onPanPointerDown}
+            onPointerMove={onPanPointerMove}
+            onPointerUp={endPan}
+            onPointerCancel={endPan}
+            onPointerLeave={endPan}
           >
             <div className="flex min-h-full w-max min-w-full items-start justify-center p-10">
               <div

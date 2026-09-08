@@ -22,8 +22,8 @@ const fadeUp = {
 const features = [
   {
     icon: Zap,
-    title: "Instant structure",
-    body: "Headings, numbered sections and bullet lists become nodes and edges the moment you drop a file.",
+    title: "Any format in",
+    body: "PDF, Word (doc/docx), JPG and PNG — even photos of whiteboards get OCR'd into structure the moment you drop them.",
   },
   {
     icon: Lock,
@@ -43,8 +43,8 @@ const features = [
 ];
 
 const steps = [
-  { n: "01", t: "Drop a PDF", d: "Drag any text-based PDF into the forge." },
-  { n: "02", t: "Local extraction", d: "pdf.js rebuilds lines and structure offline." },
+  { n: "01", t: "Drop a file", d: "PDF, Word doc, or an image — anything with text." },
+  { n: "02", t: "Local extraction", d: "pdf.js, mammoth or OCR — all offline, in your tab." },
   { n: "03", t: "Heuristic graph", d: "Sections nest into a hierarchical flowchart." },
   { n: "04", t: "Render & export", d: "Mermaid draws it; copy the syntax or SVG." },
 ];
@@ -98,7 +98,7 @@ export default function Landing() {
               transition={{ duration: 0.55, delay: 0.08 }}
               className="font-display mt-8 max-w-3xl text-4xl font-bold leading-[1.08] tracking-tight sm:text-6xl"
             >
-              Turn any PDF into a{" "}
+              Turn any{" "}
               <span className="text-gradient-blue glow-text">flowchart</span>{" "}
               in seconds.
             </motion.h1>
@@ -109,9 +109,9 @@ export default function Landing() {
               transition={{ duration: 0.55, delay: 0.16 }}
               className="mt-6 max-w-xl text-base leading-relaxed text-muted-foreground sm:text-lg"
             >
-              FlowForge reads your document's structure — headings, sections,
-              lists — and forges it into a clean, navigable diagram. Entirely in
-              your browser, entirely private.
+              PDFs, Word docs, even screenshots — FlowForge reads your
+              document's structure and forges it into a clean, navigable
+              diagram. Entirely in your browser, entirely private.
             </motion.p>
 
             <motion.div

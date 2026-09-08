@@ -55,6 +55,7 @@
     "hono": "^4.10.7",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.555.0",
+    "mammoth": "^1.12.2",
     "mermaid": "^11.17.2",
     "next-themes": "^0.4.6",
     "pdfjs-dist": "^6.3.289",
@@ -69,6 +70,7 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.17",
+    "tesseract.js": "^7.0.0",
     "vaul": "^1.1.2",
     "zod": "^4.1.13"
   },
@@ -88,5 +90,8 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.48.1",
     "vite": "^7.2.6"
-  }
+  },
+  "trustedDependencies": [
+    "tesseract.js"
+  ]
 }
